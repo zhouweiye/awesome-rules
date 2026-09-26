@@ -688,27 +688,43 @@ def call_claude_stream(prompt: str, cfg: dict) -> Tuple[str, List[dict]]:
     return final_text or "".join(texts), events
 
 
-# 派生产物排除集（A 路 release_guard 同名常量镜像，2026-09-24 对齐口径：
-# .coverage/.ruff_cache 系实测 push 拦截补录）。
+# 派生产物排除集：与 A 路 release_guard 同名常量保持一致（钉测试
+# test_skill_content_hash_matches_release_guard_contract 守护两路相等）；
+# .coverage/.ruff_cache 系 3803b82 实测 push 拦截补录。
 _DERIVED_PARTS = frozenset({".pytest_cache", "__pycache__", ".DS_Store",
                             ".coverage", ".ruff_cache"})
 _DERIVED_SUFFIXES = (".pyc",)
 
 
-def skill_content_hash(skill: str, root: Optional[Path] = None) -> str:
-    """技能内容指纹：SKILL.md + scripts/**（排除派生产物）的逐文件摘要清单。
+def _is_derived(rel: Path) -> bool:
+    """派生产物判定（与 release_guard._is_derived 契约一致）：路径任一段命中
+    缓存/系统目录名，或 *.pyc 后缀。rel 须为 scripts_dir 内相对路径——枚举
+    根之上的祖先段不参与匹配（检出位置不得污染判定）。
+    """
+    return (any(part in _DERIVED_PARTS for part in rel.parts)
+            or rel.suffix in _DERIVED_SUFFIXES)
 
-    与 A 路 scripts/release_guard.py compute_content_hash 契约统一、一字不差：
-    manifest 条目 = "{文件内容 sha256 hex}  {skill 内相对 posix 路径}\\n"，
-    按仓库根相对 posix 路径字典序逐条拼接后整体取 sha256。路径与边界参与
-    哈希：文件改名/增删/跨文件内容重排（"ab"+"c" vs "a"+"bc"）均改变 hash。
-    派生产物（.pytest_cache/、__pycache__/、*.pyc、.DS_Store、.coverage、
-    .ruff_cache/，2026-09-24 PR #237 对齐口径）不入指纹；非 UTF-8 文件
-    读取期直接抛错（fail-closed）；SKILL.md 缺失 → FileNotFoundError。
+
+def skill_content_hash(skill: str, root: Optional[Path] = None) -> str:
+    """技能内容指纹：逐文件摘要清单的 sha256（release_guard 契约一字不差）。
+
+    契约（真相源 = scripts/release_guard.compute_content_hash，本函数为 B 路
+    对齐实现；两路不漂移由钉测试守护：
+    test_skill_content_hash_matches_release_guard_contract。
+    #247 r2 2026-09-26：旧「字节直拼」算法把 __pycache__ 等派生产物吞入
+    指纹，随本地测试生灭漂移，实证不可复现）：
+    - manifest 条目 = "{文件内容 sha256 hex}  {skill 内相对 posix 路径}\\n"，
+      按仓库根相对 posix 路径字典序逐条拼接后整体 sha256——路径与边界参与
+      哈希：文件改名/增删/跨文件内容重排（"ab"+"c" vs "a"+"bc"）均改变 hash；
+      内容读取用 read_text('utf-8').encode('utf-8')（与契约表达式逐字一致）
+    - 文件面 = SKILL.md + scripts/**，排除派生产物（_is_derived）——本地
+      测试生灭物不得扰动指纹（.coverage/.ruff_cache 同排除，3803b82 实测
+      push 拦截补录）
+    - SKILL.md 缺失 → FileNotFoundError（技能内容不完整不应静默给出可比对
+      指纹）
 
     独立实现而非 import：技能脚本需自包含分发（消费仓安装面无仓库根
-    scripts/）。跨实现一致性由 scripts/tests/test_release_guard.py 的
-    A/B 双算对拍锚定（漂移即红）。
+    scripts/）。跨实现一致性由钉测试守护（漂移即红）。
     """
     root = (root or _repo_root()).resolve()
     base = root / "skills" / skill
@@ -718,18 +734,14 @@ def skill_content_hash(skill: str, root: Optional[Path] = None) -> str:
     files = [skill_md]
     scripts_dir = base / "scripts"
     if scripts_dir.is_dir():
-        files.extend(
-            p for p in scripts_dir.rglob("*")
-            if p.is_file() and not (
-                any(part in _DERIVED_PARTS
-                    for part in p.relative_to(scripts_dir).parts)
-                or p.suffix in _DERIVED_SUFFIXES))
+        files.extend(p for p in scripts_dir.rglob("*")
+                     if p.is_file() and not _is_derived(p.relative_to(scripts_dir)))
     files.sort(key=lambda p: p.relative_to(root).as_posix())
     manifest = "".join(
         f"{hashlib.sha256(p.read_text(encoding='utf-8').encode('utf-8')).hexdigest()}"
         f"  {p.relative_to(base).as_posix()}\n"
         for p in files)
-    return f"sha256:{hashlib.sha256(manifest.encode('utf-8')).hexdigest()}"
+    return "sha256:" + hashlib.sha256(manifest.encode("utf-8")).hexdigest()
 
 
 def write_replay_evidence(skill: str, payload: dict, root: Optional[Path] = None) -> Path:
