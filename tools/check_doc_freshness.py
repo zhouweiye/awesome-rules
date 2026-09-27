@@ -22,7 +22,7 @@
      找不到测试文件 → [INFO] 跳过
   R5 交叉引用防复发（只查两条已踩坑断言，防回归）：
      a. impact-guard SKILL/README 不得再出现「复用 arch-guard」；
-        「复用来源」行须指向实际存在的 doc-gen 路径
+        「复用来源」行须指向实际存在的 vendored 路径
      b. .factory/README 不得再出现「git checkout -b factory/issue」
         （实际是 worktree add -B）
   R6 平台清单覆盖：.opencode/opencode.json 的 instructions ⊇
@@ -317,7 +317,7 @@ def rule_r5(root: Path, g: Gate) -> None:
         for i, ln in enumerate(_lines(p), 1):
             if R5_REUSE_RE.search(ln):
                 g.fail(f"{rel}:{i}",
-                       "R5 禁用表述「复用 arch-guard」（实际依赖经 doc-gen，防复发）")
+                       "R5 禁用表述「复用 arch-guard」（实际依赖 vendored 快照，防复发）")
             if "复用来源" in ln:
                 m = re.search(r"\]\(([^)\s]+)\)", ln)
                 target = m[1] if m else None
@@ -331,9 +331,9 @@ def rule_r5(root: Path, g: Gate) -> None:
                 elif not (p.parent / target).resolve().exists():
                     g.fail(f"{rel}:{i}",
                            f"R5 复用来源指向不存在路径 {target}")
-                elif "doc-gen" not in target:
+                elif "_vendored" not in target:
                     g.fail(f"{rel}:{i}",
-                           f"R5 复用来源须指向 doc-gen 路径（实际 {target}）")
+                           f"R5 复用来源须指向 _vendored 路径（实际 {target}）")
 
     for i, ln in enumerate(_lines(root / ".factory" / "README.md"), 1):
         if R5_CHECKOUT_RE.search(ln):

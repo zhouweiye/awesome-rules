@@ -130,8 +130,7 @@ require_dir() {
 # （pytest 层实跑面，整棵 .factory 含 gitignored 工厂链 worktree）
 LAYER_DIRS='scripts .factory/tests tools/tests
 skills/api-guard/scripts skills/ddl-guard/scripts skills/arch-guard/scripts
-skills/impact-guard/scripts/tests skills/skill-evo/scripts/tests
-skills/doc-gen/scripts/tests'
+skills/impact-guard/scripts/tests skills/skill-evo/scripts/tests'
 
 # 语法探针面 = 门禁实跑面的导入闭包（find_py 候选必须过这批源码的
 # 语法+模块级执行，见 py_syntax_ok）：层清单（pytest 收集面）+ 各 tests
@@ -142,7 +141,7 @@ skills/doc-gen/scripts/tests'
 # P0-1 实证：不传则 hosting.py/guard_lib.py 等 6 文件脱防，3.9 遇 PEP 604
 # 时 find_py 不拒候选、退化为 pytest 层晚爆）
 PY_SYNTAX_DIRS="$LAYER_DIRS .factory skills/_shared
-skills/impact-guard/scripts skills/skill-evo/scripts skills/doc-gen/scripts
+skills/impact-guard/scripts skills/skill-evo/scripts
 tools"
 
 # ── doctor 模式：环境自诊断，不跑层、不清产物 ───────────────────────────
@@ -309,7 +308,6 @@ else
         "$PY" -m pytest skills/arch-guard/scripts -q
     run_layer_bg pytest-impact-guard "$PY" -m pytest skills/impact-guard/scripts/tests -q
     run_layer_bg pytest-skill-evo "$PY" -m pytest skills/skill-evo/scripts/tests -q
-    run_layer_bg pytest-doc-gen "$PY" -m pytest skills/doc-gen/scripts/tests -q
     wait_layers
     run_layer plugin-versions "$PY" tools/check_plugin_versions.py
     # 实现↔文档一致性（数字/清单/指向漂移，R1-R11 语义见脚本头注释）

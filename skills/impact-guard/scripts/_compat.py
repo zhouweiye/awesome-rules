@@ -1,17 +1,17 @@
-"""跨技能复用桥 — 导入 doc-gen 的 JavaScanner / LayerIdentifier
+"""复用桥 — 导入 vendored 的 JavaScanner / LayerIdentifier
 
-复用来源（DESIGN.md §6）：doc-gen 的 scanner/java.py 与 generator/layers.py。
-（评审稿写"arch-guard"，实际物理位置在 doc-gen——JavaScanner/LayerIdentifier
-从未存在于 arch-guard 的单文件 arch_check.py 中。）
+doc-gen 于 2026-09-27 整体迁往 arch-hawkeye 仓（docgen/scripts/）；
+java.py / layers.py / doctypes.py 按迁移时快照 vendored 于 _vendored/，
+升级 = 用 arch-hawkeye 同名文件覆盖后跑本技能测试。
 """
 
 import sys
 from pathlib import Path
 
-DOC_GEN_SCRIPTS = Path(__file__).resolve().parent.parent.parent / "doc-gen" / "scripts"
+VENDORED = Path(__file__).resolve().parent / "_vendored"
 
-if str(DOC_GEN_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(DOC_GEN_SCRIPTS))
+if str(VENDORED) not in sys.path:
+    sys.path.insert(0, str(VENDORED))
 
-from scanner.java import JavaScanner          # noqa: E402,F401
-from generator.layers import LayerIdentifier  # noqa: E402,F401
+from java import JavaScanner          # noqa: E402,F401
+from layers import LayerIdentifier    # noqa: E402,F401
