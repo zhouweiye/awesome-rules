@@ -3,7 +3,7 @@
   "files": {
     ".agents/plugins/marketplace.json": "a8c9d4ddf59735675a3aa3066ea57c115628d9bf",
     ".claude-plugin/marketplace.json": "feaf1660fec29031a75cea314e9ed34e410fccb7",
-    ".claude-plugin/plugin.json": "18c3615fb59c4739a91607c47be17c2dc1763d3b",
+    ".claude-plugin/plugin.json": "a644ea73429f73e9bb2e38f2904db69c875cdb29",
     ".codex-plugin/plugin.json": "ca8625919011ec108d049c1a4d18b3b12a43e96d",
     ".cursor-plugin/marketplace.json": "a2bb96291422060908dac1a54ca437698678e292",
     ".cursor-plugin/plugin.json": "5c0fe22efe77f9855c9818831b8878ff434f250e",
@@ -11,7 +11,7 @@
     ".grok-plugin/plugin.json": "5c0fe22efe77f9855c9818831b8878ff434f250e",
     ".kimi-plugin/marketplace.json": "449147eff3a8cc87b35973612660435dc9b2258d",
     ".kimi-plugin/plugin.json": "e751b8d5b7e22f70765c04b10d6740daf14f0723",
-    ".opencode/opencode.json": "0fc1cadc17de40123da359ed5912f9527611baac",
+    ".opencode/opencode.json": "f5f68509e566233a3edc66227960b6b7e364c97d",
     ".pi/extensions/awesome-rules.ts": "910037bcb4ad57f0b53eb0dd45104c5dee768cc5",
     "hooks/hooks.json": "5d2b3580caff3286ee3a7464f1be70daa6ca5de0"
   },
@@ -20,9 +20,9 @@
     "arch-guard": "sha256:6f137baf06b7e63171416b2566e7eea62a58ddeeeb65597e274a45d28403e77d",
     "contract-guard": "sha256:cac0f758c37b75d8c507a394ff34735dcb0d410e00e1ec5b033e48f6c76a8749",
     "ddl-guard": "sha256:fd42bac1ff966a678d47483a19f3f9e0970fac3920bd4169bf5712084fbaee77",
-    "doc-gen": "sha256:589fa20e0d85481fb96a2cd0f9571413e50009e75248ec9a9dc1351d20d342e0",
-    "impact-guard": "sha256:3d39decbfa6822eea1e7269e9c48ba4fd0ea013fe8216527237f2ddcb28e6b18",
-    "skill-evo": "sha256:40671bcca9ee7273b471cf21cdd176599677e54aaf4131388d4515e9f8b53be0",
+    "doc-gen": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "impact-guard": "sha256:7f431264daae9afe5ff5db17b4d743f57730dc28a3c832d0e76e7010e4f0c373",
+    "skill-evo": "sha256:84688c8d57bcceb6c9310e5e42a93132a4b50bb3f4e2d67a70afb3729edd6f1f",
     "task-flow": "sha256:9ecdca4ec05040d04fbe0414bb8248d17371425b5dafa130f4571ab8d72bdf11",
     "work-report": "sha256:f0207bf9db034e059e83bbd57c78ded688ed63c05e82164bf8e81c43be08e9cb"
   }
