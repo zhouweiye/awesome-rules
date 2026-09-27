@@ -50,10 +50,8 @@ class ImpactScanner:
 
     def _ignored(self, qn: str) -> bool:
         import fnmatch
-        for pattern in self.config.get("ignore", []):
-            if fnmatch.fnmatch(qn, pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(qn, pattern)
+                   for pattern in self.config.get("ignore", []))
 
     def propagate_inbound(self, change_qn: str, depth: int = 3) -> list[ImpactNode]:
         """谁调用了我（inbound）：沿 reverse_index BFS。"""
@@ -88,5 +86,5 @@ class ImpactScanner:
         if qn not in self._layer_cache:
             from _compat import LayerIdentifier
             result = LayerIdentifier().classify(self.infos.get(qn, {}))
-            self._layer_cache[qn] = result if result else ("", "")
+            self._layer_cache[qn] = result or ("", "")
         return self._layer_cache[qn]

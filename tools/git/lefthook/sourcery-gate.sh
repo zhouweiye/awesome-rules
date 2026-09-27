@@ -26,6 +26,9 @@ command -v sourcery >/dev/null 2>&1 || { echo "[sourcery] 未安装 sourcery CLI
 SUPPORTED=()   # 实测有效：进 review 闸面
 UNSENT=()      # 实测不扫描 / 未实测：显式披露，不进闸面
 for f in "$@"; do
+  # 纯删除 push：文件已不存在，不在任何评审面（2026-09-27 doc-gen 移除
+  # 122 文件实证：不滤则 sourcery 对不存在路径直接 Usage error 拦死 push）
+  [ -e "$f" ] || continue
   case "$f" in
     .lefthook/*) continue ;;
     *.py|*.ts|*.js) SUPPORTED+=("$f") ;;
