@@ -86,7 +86,7 @@ class ImpactScanner:
 
     def _layer_of(self, qn: str) -> tuple[str, str]:
         if qn not in self._layer_cache:
-            from generator.layers import LayerIdentifier
+            from _compat import LayerIdentifier
             result = LayerIdentifier().classify(self.infos.get(qn, {}))
             self._layer_cache[qn] = result if result else ("", "")
         return self._layer_cache[qn]
