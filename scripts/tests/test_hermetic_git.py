@@ -33,8 +33,6 @@ GIT_FIXTURE_CASES = [
      "tests/test_arch_check.py::test_commit_binding_git_semantics"),
     ("skills/impact-guard/scripts",
      "tests/test_impact_guard.py::TestRenderer::test_commit_binding_git_semantics"),
-    ("skills/doc-gen/scripts",
-     "tests/test_risks.py::test_blame_file_batch_parses_full_file"),
     (".factory",
      "tests/test_factory_local.py::TestStampRoundtrip::test_full_cycle_announce_then_refresh"),
  ]

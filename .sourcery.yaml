@@ -8,6 +8,7 @@ version: '1'
 
 ignore:
 - .git
+- skills/impact-guard/scripts/_vendored  # doc-gen 迁出快照：字节级镜像 arch-hawkeye 真相源，覆盖即升级
 - env
 - .env
 - .tox

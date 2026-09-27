@@ -13,13 +13,13 @@ SECRET_PATTERN='((api[_-]?key|s[e]cret|passw[o]rd|pass[w]d|auth[_-]?t[o]ken|acce
 #   （.factory/artifacts、.crush …）与链 worktree 检出副本
 #   （.factory/worktrees 含 LLM implement 产物）天然出局。此前手工
 #   --exclude-dir 清单与 .gitignore 必然漂移（md_link_check 双实证同根因）。
-# 2. tracked vendored（doc-gen Astro 模板）用显式排除——dist/node_modules/
-#   template 里的 password:/token: 是字段名不是泄漏凭据，本仓不可能在那里
+# 2. tracked vendored（impact-guard 自 doc-gen 迁出的快照）用显式排除——
+#   快照内的 password:/token: 是字段名不是泄漏凭据，本仓不可能在那里
 #   引入凭据。排除是范围对准，不是刷分（与覆盖率排除生成代码同理）。
 # 仓库外（自测夹具等非 git 路径）：退化为对给定文件直查。
 # grep 的 rc 必须显式捕获：无匹配的 rc=1 是好路径，裸 grep 会触发
 # 调用方 set -e 直接杀死脚本（NC3 回归）。
-_EXCLUDE_TRACKED_VENDORED='^skills/doc-gen/scripts/template/'
+_EXCLUDE_TRACKED_VENDORED='^skills/impact-guard/scripts/_vendored/'
 _SCAN_EXTS='\.py$|\.sh$|\.yml$|\.yaml$|\.js$'
 
 _all_args_inside_repo() {

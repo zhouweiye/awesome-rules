@@ -23,7 +23,6 @@ awesome-rules/
 │   ├── api-guard/                     # API 设计与审查
 │   ├── arch-guard/                    # DDD 架构分层审查
 │   ├── contract-guard/                # 跨仓契约兼容性设计与审查（japicmp + 下游编译门禁）
-│   ├── doc-gen/                       # DDD 技术文档自动生成（单项目）
 │   ├── impact-guard/                  # 变更影响分析（blast radius）
 │   ├── work-report/                   # 跨仓库工作日报/周报
 │   ├── alibabacloud-devops/           # 云效 DevOps 工具集
@@ -84,7 +83,6 @@ Java/Spring Cloud 微服务（`gtsp-*`/`fss-*`）编码规范，按维度拆分�
 | [ddl-guard](skills/ddl-guard/README.md) | MySQL DDL 设计与规范审查 |
 | [api-guard](skills/api-guard/README.md) | 业务接口规范审查 |
 | [arch-guard](skills/arch-guard/README.md) | DDD 架构分层规范审查 |
-| [doc-gen](skills/doc-gen/README.md) | DDD 技术文档自动生成（交互式静态站点） |
 | [impact-guard](skills/impact-guard/README.md) | 变更影响分析（blast radius），按直接/间接 + GTSP 5 通道分级 |
 | [work-report](skills/work-report/README.md) | 跨仓库工作日报/周报自动生成（3 种受众模板） |
 | [alibabacloud-devops](skills/alibabacloud-devops/SKILL.md) | 阿里云云效 DevOps 工具集（Codeup/流水线/工作项，mcporter 代理） |
@@ -98,8 +96,9 @@ Java/Spring Cloud 微服务（`gtsp-*`/`fss-*`）编码规范，按维度拆分�
 **独立工程**（非技能，不随本仓发布）：
 
 - 架构鹰眼 `arch-hawkeye` — 多项目聚合 / 跨项目链路（HTTP/MQ/DB/缓存/定时 5 通道）/
-  变更影响分析 / 治理闭环 / 本地双模式。已拆分为独立仓库（2026-09-23），
-  消费 doc-gen 产出的 `doc-manifest/`，契约快照与漂移门禁见其 `contracts/manifest/`。
+  变更影响分析 / 治理闭环 / 本地双模式。已拆分为独立仓库（2026-09-23）；
+  doc-gen 亦已于 2026-09-27 迁入该仓（`docgen/`，统一 CLI `hawkeye.py docgen`），
+  产出的 `doc-manifest/` 契约真相源见其 `docgen/schemas/`。
 
 各技能的详细文档、用法和检查规则见各自目录下的 README。
 

@@ -294,4 +294,4 @@ cola-sample 风格  ──对齐──► fixtures/ddd-sample
 - 快速使用：[`README.md`](README.md)
 - 完整论证 / 评审稿（含 grill 决策）：[`../../docs/design/impact-guard-design.md`](../../docs/design/impact-guard-design.md)
 - 架构规范：[`../../steering/gtsp/01-project-structure.md`](../../steering/gtsp/01-project-structure.md)
-- 复用来源：[`../doc-gen/scripts/scanner/java.py`](../doc-gen/scripts/scanner/java.py) 与 [`../doc-gen/scripts/generator/layers.py`](../doc-gen/scripts/generator/layers.py)（经 [`scripts/_compat.py`](scripts/_compat.py) sys.path 桥接）
+- 复用来源：[`scripts/_vendored/java.py`](scripts/_vendored/java.py) 与 [`scripts/_vendored/layers.py`](scripts/_vendored/layers.py)（doc-gen 迁往 arch-hawkeye 后的 vendored 快照，经 [`scripts/_compat.py`](scripts/_compat.py) 桥接）

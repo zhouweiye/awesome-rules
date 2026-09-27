@@ -43,8 +43,6 @@
        "argv": ["$PY", "-m", "pytest", "tests", "-o", "addopts=", "-q"]},
       {"name": "pytest skills/ddl-guard/scripts", "tag": "skills/ddl-guard/scripts", "cwd": "skills/ddl-guard/scripts",
        "argv": ["$PY", "-m", "pytest", "tests", "-o", "addopts=", "-q"], "intra": "auto", "stack": "pytest"},
-      {"name": "pytest skills/doc-gen/scripts", "tag": "skills/doc-gen/scripts", "cwd": "skills/doc-gen/scripts",
-       "argv": ["$PY", "-m", "pytest", "tests", "-o", "addopts=", "-q"]},
       {"name": "pytest skills/impact-guard/scripts", "tag": "skills/impact-guard/scripts", "cwd": "skills/impact-guard/scripts",
        "argv": ["$PY", "-m", "pytest", "tests", "-o", "addopts=", "-q"]},
       {"name": "pytest skills/skill-evo/scripts", "tag": "skills/skill-evo/scripts", "cwd": "skills/skill-evo/scripts",
