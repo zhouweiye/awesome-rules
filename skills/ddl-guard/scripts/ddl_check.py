@@ -277,6 +277,36 @@ _CREATE_TABLE_RE = re.compile(
 )
 
 
+def _paren_delta(seg: str) -> int:
+    """统计一行文本的括号差值（引号字符串内的括号不计数）。
+
+    字段注释如 `COMMENT '节点slug(url短标签）'` 中的 `(` 位于字符串字面量内，
+    不属于表体结构括号；若计入深度且无对应 `)` 闭合（如配对的是全角 `）`），
+    解析器会持续吞行直到把下一条 CREATE TABLE 误判为字段。
+    """
+    delta = 0
+    quote = None
+    i = 0
+    n = len(seg)
+    while i < n:
+        ch = seg[i]
+        if quote:
+            if ch == quote:
+                # SQL 转义：'' 表示字面单引号，跳过第二个引号
+                if quote == "'" and i + 1 < n and seg[i + 1] == "'":
+                    i += 2
+                    continue
+                quote = None
+        elif ch in ("'", '"', "`"):
+            quote = ch
+        elif ch == "(":
+            delta += 1
+        elif ch == ")":
+            delta -= 1
+        i += 1
+    return delta
+
+
 def extract_tables(raw_text: str) -> list:
     """Parse CREATE TABLE statements from SQL text."""
     lines = raw_text.split("\n")
@@ -319,7 +349,7 @@ def extract_tables(raw_text: str) -> list:
                 full_lines.append(seg)
                 if "(" in seg:
                     opened = True
-                paren_depth += seg.count("(") - seg.count(")")
+                paren_depth += _paren_delta(seg)
                 j += 1
                 if opened and paren_depth <= 0:
                     break  # 表体 '(' 已闭合（含首行即闭合的单行建表）

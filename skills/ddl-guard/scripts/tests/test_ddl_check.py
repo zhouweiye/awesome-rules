@@ -1512,6 +1512,62 @@ def test_create_table_paren_next_line_parsed():
     assert any(f.name == "creator_id" for f in tables[0].fields)
 
 
+# ── 注释含括号的解析健壮性（引号内括号不参与表体深度计数）────────────────
+
+def _minimal_two_tables(first_table_comment_line: str) -> str:
+    """两张表的最小 DDL：第一张表某字段注释含指定文本，第二张表随后。"""
+    return (
+        "CREATE TABLE t_first (\n"
+        f"  slug varchar(128) DEFAULT NULL COMMENT '{first_table_comment_line}',\n"
+        "  id bigint(20) NOT NULL COMMENT '主键id'\n"
+        ") COMMENT = 'x';\n"
+        "CREATE TABLE t_second (\n"
+        "  id bigint(20) NOT NULL COMMENT '主键id'\n"
+        ") COMMENT = 'y';\n"
+    )
+
+
+def test_comment_with_unpaired_paren_does_not_break_parsing():
+    """注释含未配对半角括号 '(' → 引号内括号不计数，解析不吞行。"""
+    tables = ddl_check.extract_tables(_minimal_two_tables("节点slug(url短标签"))
+    assert len(tables) == 2
+    assert tables[0].name == "t_first"
+    assert any(f.name == "id" for f in tables[0].fields)
+    assert tables[1].name == "t_second"
+
+
+def test_comment_with_fullwidth_paren_does_not_break_parsing():
+    """注释含全角括号 '）'（不闭合半角 '('）→ 不产生 CREATE 字段噪音。"""
+    tables = ddl_check.extract_tables(_minimal_two_tables("节点slug(url短标签）"))
+    assert len(tables) == 2
+    assert all(t.name in ("t_first", "t_second") for t in tables)
+    # 不应把 CREATE 误解析为字段
+    assert not any(f.name.upper() == "CREATE" for t in tables for f in t.fields)
+
+
+def test_comment_with_paired_paren_parsed_normally():
+    """注释含配对半角括号 '(url短标签)' → 正常解析。"""
+    tables = ddl_check.extract_tables(_minimal_two_tables("节点slug(url短标签)"))
+    assert len(tables) == 2
+    assert any(f.name == "slug" for f in tables[0].fields)
+
+
+def test_comment_escaped_quote_does_not_break_parsing():
+    """注释含 SQL 转义单引号 '' → 引号状态机不提前闭合。"""
+    tables = ddl_check.extract_tables(_minimal_two_tables("it''s ok (测试"))
+    assert len(tables) == 2
+    assert tables[1].name == "t_second"
+
+
+def test_fullwidth_paren_comment_still_flagged():
+    """全角括号注释：解析恢复后仍应报『全角字符』违规。"""
+    issues = _issues_for(_ddl_with_field("node_slug varchar(128) COMMENT '节点slug(url短标签）'"))
+    assert any(
+        i.rule == "全角字符" and "）" in i.description
+        for i in issues
+    )
+
+
 def test_multiple_tables_not_merged():
     """多建表语句：前一表体闭合后不得吞并后续 CREATE TABLE。"""
     tables = ddl_check.extract_tables(
