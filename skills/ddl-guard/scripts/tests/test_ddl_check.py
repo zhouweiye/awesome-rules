@@ -1536,6 +1536,45 @@ def test_comment_with_unpaired_paren_does_not_break_parsing():
     assert tables[1].name == "t_second"
 
 
+# ── TEXT/BLOB/JSON 族类型不允许 DEFAULT（MySQL 语法限制）────────────────
+
+def test_text_default_null_flagged():
+    """mediumtext DEFAULT NULL → 报『TEXT类型含DEFAULT』强制违规。"""
+    issues = _issues_for(_ddl_with_field("node_text mediumtext DEFAULT NULL COMMENT '节点正文'"))
+    assert any(
+        i.rule == "TEXT类型含DEFAULT" and i.severity == Severity.MANDATORY
+        and "node_text" in i.description
+        for i in issues
+    )
+
+
+def test_text_default_value_flagged():
+    """text DEFAULT 'x' → 同样违规（该族类型不能有任何 DEFAULT）。"""
+    issues = _issues_for(_ddl_with_field("detl_json text DEFAULT '' COMMENT '明细json'"))
+    assert any(
+        i.rule == "TEXT类型含DEFAULT"
+        for i in issues
+    )
+
+
+def test_text_without_default_ok():
+    """mediumtext 无 DEFAULT → 不报『TEXT类型含DEFAULT』。"""
+    issues = _issues_for(_ddl_with_field("node_text mediumtext COMMENT '节点正文'"))
+    assert all(i.rule != "TEXT类型含DEFAULT" for i in issues)
+
+
+def test_text_default_in_comment_not_flagged():
+    """注释文案含『默认值』字样 → 误报防护，不报『TEXT类型含DEFAULT』。"""
+    issues = _issues_for(_ddl_with_field("node_text mediumtext COMMENT '正文,默认值为空'"))
+    assert all(i.rule != "TEXT类型含DEFAULT" for i in issues)
+
+
+def test_blob_default_flagged():
+    """blob 族同样不能有 DEFAULT。"""
+    issues = _issues_for(_ddl_with_field("file_data blob DEFAULT NULL COMMENT '文件数据'"))
+    assert any(i.rule == "TEXT类型含DEFAULT" for i in issues)
+
+
 def test_comment_with_fullwidth_paren_does_not_break_parsing():
     """注释含全角括号 '）'（不闭合半角 '('）→ 不产生 CREATE 字段噪音。"""
     tables = ddl_check.extract_tables(_minimal_two_tables("节点slug(url短标签）"))

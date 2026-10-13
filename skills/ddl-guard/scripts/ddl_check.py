@@ -990,9 +990,47 @@ def check_field_type(field: FieldInfo, table_name: str, issues: list):
     if base_type in FORBIDDEN_TYPES:
         issues.append(Issue(
             table=table_name, severity=Severity.MANDATORY, rule="禁用类型",
-            location=f"表:{table_name} 字段:{field.name}", 
+            location=f"表:{table_name} 字段:{field.name}",
             description=f"字段 {field.name} 使用了禁用类型 {field.type}",
             suggestion=FORBIDDEN_TYPES[base_type],
+        ))
+
+
+# ── TEXT/BLOB/JSON 族类型不允许 DEFAULT（MySQL 语法限制）──────────────────
+# MySQL 中 BLOB/TEXT/GEOMETRY/JSON 列不能有默认值，显式 `DEFAULT NULL` 也
+# 会直接报错（BLOB, TEXT, GEOMETRY or JSON column can't have a default value）。
+TEXT_NO_DEFAULT_TYPES = {
+    "text", "tinytext", "mediumtext", "longtext",
+    "blob", "tinyblob", "mediumblob", "longblob",
+    "json",
+}
+
+
+def check_text_default(field: FieldInfo, table_name: str, issues: list):
+    """TEXT/BLOB/JSON 族字段不得指定 DEFAULT（含 DEFAULT NULL）。
+
+    MySQL 限制：这类列不能有默认值。检查字段原始定义行（剥掉注释字符串后）
+    是否含 DEFAULT 关键字，避免注释文案（如 '默认值说明'）误触发。
+    """
+    type_lower = field.type.lower().strip()
+    base_type_match = re.match(r"(\w+)", type_lower)
+    if not base_type_match or base_type_match[1] not in TEXT_NO_DEFAULT_TYPES:
+        return
+
+    # 剥掉 '...' 字符串（注释/字符串字面量）后再找 DEFAULT，防注释文案误报
+    no_string = re.sub(r"'(?:[^']|'')*'", "", field.raw_definition or "")
+    if re.search(r"(?i)\bDEFAULT\b", no_string):
+        issues.append(Issue(
+            table=table_name, severity=Severity.MANDATORY, rule="TEXT类型含DEFAULT",
+            location=f"表:{table_name} 字段:{field.name}",
+            description=(
+                f"字段 {field.name} 为 {field.type} 类型，不能指定 DEFAULT"
+                f"（含 DEFAULT NULL，MySQL 限制：该类列无默认值）"
+            ),
+            suggestion=(
+                f"去掉 DEFAULT 子句，可空语义由列默认 NULL 表达："
+                f"`{field.name} {field.type} COMMENT '...'"
+            ),
         ))
 
 
@@ -1249,6 +1287,7 @@ def check_file(file_path: str) -> list:
             check_field_name(field, table.name, issues)
             check_field_comment(field, table.name, issues)
             check_field_type(field, table.name, issues)
+            check_text_default(field, table.name, issues)
             check_varchar_length(field, table.name, issues)
 
         check_index_naming(table, issues)
