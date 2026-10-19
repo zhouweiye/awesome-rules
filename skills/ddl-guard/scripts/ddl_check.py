@@ -938,21 +938,27 @@ def check_field_comment(field: FieldInfo, table_name: str, issues: list):
             suggestion="格式：中文名(补充信息)[枚举信息]，如 '父参数id(0=根,支持嵌套)'",
         ))
 
-    # R2: 取值范围 [k-v,...] 格式（COL033）——所有 [..] 段逐一校验
+    # R2: 取值范围格式（COL033）——所有 [..] 段逐一校验
+    # steering 规范允许两种形态：[k-v,...]（k-v 形态）或 [值,值,...]（纯值形态）。
     kv_pattern = re.compile(
         r"^[\w\u4e00-\u9fff]+[-=][^\[\],()\s]+(?:\s*,\s*[\w\u4e00-\u9fff]+[-=][^\[\],()\s]+)*\s*$"
     )
+    # 纯值形态：每段为单个 token（单词/词根/中英数字，可含连字符如 0-100），逗号分隔。
+    # 含括号/冒号/箭头/斜杠/空白等符号的段说明是描述性文字混入，不视为合法纯值。
+    plain_value_pattern = re.compile(r"^[\w\u4e00-\u9fff-]+$")
     for bracket_match in re.finditer(r"\[([^\[\]]*)\]", comment):
         bracket_content = bracket_match.group(1).strip()
         if not bracket_content:
             continue
+        segments = [seg.strip() for seg in bracket_content.split(",") if seg.strip()]
+        is_plain_values = bool(segments) and all(plain_value_pattern.match(s) for s in segments)
         # 排除字符集：不允许多个 k-v 间无逗号（空格代替）、value 含括号或空白
-        if not kv_pattern.match(bracket_content):
+        if not (kv_pattern.match(bracket_content) or is_plain_values):
             issues.append(Issue(
                 table=table_name, severity=Severity.MANDATORY, rule="注释取值范围格式",
                 location=f"表:{table_name} 字段:{field.name}",
-                description=f"取值范围 '[{bracket_content}]' 不符合 k-v 格式",
-                suggestion="格式：[k1-v1,k2-v2,...]，如 [10-待支付,20-已支付,30-已完成]",
+                description=f"取值范围 '[{bracket_content}]' 不符合 [k-v,...] 或 [值,值,...] 格式",
+                suggestion="格式：[10-待支付,20-已支付] 或 [enabled,disabled]，说明性文字应放 () 补充信息",
             ))
 
     # R3: 补充信息 () 语法粗略检查（COL034）——所有 (..) 段逐一校验

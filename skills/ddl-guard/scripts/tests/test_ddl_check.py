@@ -773,13 +773,17 @@ def test_comment_bracket_kv_format_bad():
     )
 
 
-def test_comment_bracket_kv_format_missing_kv():
-    """注释取值范围 [状态] → 违规（缺少 k-v 对）。"""
-    issues = _issues_for(_ddl_with_field("status tinyint COMMENT '订单状态[状态]'"))
-    assert any(
-        i.rule == "注释取值范围格式"
-        for i in issues
-    )
+def test_comment_bracket_single_plain_value_ok():
+    """单值枚举 [HTTP] / [状态] → 合规（[值,值,...] 的单值形态，语义交由 R1/AI 判断）。"""
+    for comment in ("协议[HTTP]", "订单状态[状态]"):
+        issues = _issues_for(_ddl_with_field("ext varchar(16) COMMENT '%s'" % comment))
+        assert all(i.rule != "注释取值范围格式" for i in issues), comment
+
+
+def test_comment_bracket_desc_with_space_still_flagged():
+    """[] 内含空格的说明性文字（非纯值非 k-v）→ 仍违规。"""
+    issues = _issues_for(_ddl_with_field("ext varchar(64) COMMENT '键[订阅键 companyId 最长134]'"))
+    assert any(i.rule == "注释取值范围格式" for i in issues)
 
 
 def test_comment_bracket_kv_format_space_between():
@@ -789,6 +793,34 @@ def test_comment_bracket_kv_format_space_between():
         i.rule == "注释取值范围格式"
         for i in issues
     )
+
+
+# ── R2 纯值枚举形态（steering 规范允许 [值,值,...]）────────────────────
+
+def test_comment_bracket_plain_values_ok():
+    """纯值枚举 [enabled,disabled] → 合规（规范允许 [值,值,...] 形态）。"""
+    issues = _issues_for(_ddl_with_field("status varchar(16) COMMENT '状态[enabled,disabled]'"))
+    assert all(i.rule != "注释取值范围格式" for i in issues)
+
+
+def test_comment_bracket_plain_values_mixed_case_ok():
+    """纯值枚举 [pending,success,failed,managed] / [G,E] → 合规。"""
+    for comment in ("校验状态[pending,success,failed,managed]", "切流模式[G,E]"):
+        issues = _issues_for(_ddl_with_field("mode varchar(16) COMMENT '%s'" % comment))
+        assert all(i.rule != "注释取值范围格式" for i in issues), comment
+
+
+def test_comment_bracket_desc_text_still_flagged():
+    """[] 内混入说明性文字（冒号/箭头/大括号）→ 仍违规。"""
+    for comment in (
+        "提取规则[行式:源路径→固定信封字段,必配]",
+        "字段表JSON[{a,b},spec]",
+        "对象键[订阅键companyId×msgType最长134]",
+        "阶段[envelope/enrich/meta等]",
+    ):
+        issues = _issues_for(_ddl_with_field("ext varchar(64) COMMENT '%s'" % comment))
+        assert any(i.rule == "注释取值范围格式" for i in issues), comment
+
 
 
 def test_comment_bracket_kv_format_paren_in_value():
