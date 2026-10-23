@@ -129,13 +129,13 @@ def test_check_file_detects_reserved_table_name():
 
 # ── 辅助：写临时 DDL 并检查 ───────────────────────────────────────────────
 
-def _issues_for(ddl_text):
-    """写临时 DDL 文件并返回 check_file 结果。"""
+def _issues_for(ddl_text, config=None):
+    """写临时 DDL 文件并返回 check_file 结果（config 为项目配置，None 用默认）。"""
     with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False) as f:
         f.write(ddl_text)
         path = f.name
     try:
-        return ddl_check.check_file(path)
+        return ddl_check.check_file(path, config=config)
     finally:
         os.unlink(path)
 
@@ -1919,3 +1919,542 @@ def test_comment_multiple_paren_segments_all_checked():
         )
     )
     assert any(i.rule == "补充信息冗余" for i in dup)
+
+
+# ── 枚举字段类型（注释声明值域 + 字符串类型 → 强制 tinyint）───────────────
+
+def _enum_hits(issues):
+    return [i for i in issues if i.rule == "枚举字段类型"]
+
+
+def test_enum_symbolic_domain_flagged_mandatory():
+    """注释声明符号枚举值域 + varchar → 强制报「枚举字段类型」。"""
+    issues = _issues_for(_ddl_with_field(
+        "verf_status varchar(16) NOT NULL DEFAULT '' "
+        "COMMENT '验证状态[pending,success,failed]'"
+    ))
+    hits = _enum_hits(issues)
+    assert len(hits) == 1 and hits[0].severity == Severity.MANDATORY
+
+
+def test_enum_numeric_domain_flagged():
+    """数字码值域 + varchar（码值未落 tinyint）同样强制报。"""
+    issues = _issues_for(_ddl_with_field(
+        "auth_type varchar(32) NOT NULL DEFAULT '' COMMENT '鉴权类型[10-NONE,20-HMAC]'"
+    ))
+    assert _enum_hits(issues), issues
+
+
+def test_enum_tinyint_ok():
+    """tinyint + 数字码值域 → 不报。"""
+    issues = _issues_for(_ddl_with_field(
+        "auth_type tinyint(4) NOT NULL DEFAULT 0 COMMENT '鉴权类型[10-无,20-HMAC]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_without_declared_domain_not_flagged():
+    """仅字段名像状态、注释未声明值域 → 不报（避免 order_status 泛化误伤）。"""
+    issues = _issues_for(_ddl_with_field(
+        "order_status varchar(10) NOT NULL COMMENT '订单状态'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_single_value_domain_not_flagged():
+    """仅 1 个值不算枚举值域 → 不报。"""
+    issues = _issues_for(_ddl_with_field(
+        "biz_scope varchar(16) NOT NULL DEFAULT '' COMMENT '业务范围[ALL]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_multi_value_list_not_flagged():
+    """注释提示「逗号分隔」的多值列表列（名称无列表后缀）→ 不报。
+
+    用例字段名刻意不带 `_list/_lines` 等后缀，确保覆盖的是注释提示分支
+    （带后缀的用例另有 test_enum_multi_value_list_suffix_not_flagged）。
+    """
+    issues = _issues_for(_ddl_with_field(
+        "biz_scope varchar(128) NOT NULL DEFAULT '' "
+        "COMMENT '对接业务线,逗号分隔[10-物流,20-商贸]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_text_type_not_flagged():
+    """TEXT 族不参与枚举规则：由「禁用类型」单独报告，避免同字段被双报。"""
+    issues = _issues_for(_ddl_with_field(
+        "payload_body text COMMENT '报文载荷[10-A,20-B]'"
+    ))
+    assert not _enum_hits(issues)
+    assert any(i.rule == "禁用类型" for i in issues)
+
+
+def test_enum_range_comment_not_flagged():
+    """注释声明的是数值区间（费率区间[0,100]）→ 不是枚举值域，不报。"""
+    issues = _issues_for(_ddl_with_field(
+        "rate_range varchar(32) NOT NULL DEFAULT '' COMMENT '费率区间[0,100]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+@pytest.mark.parametrize("comment", [
+    "业务范围[1-订单,2-结算]",
+    "适用范围[1-线上,2-线下]",
+    "范围类型[1-闭区间,2-开区间]",
+])
+def test_enum_business_scope_still_flagged(comment):
+    """注释含「范围」但值域是业务枚举（非全数字）→ 仍须报，不得静默漏报。"""
+    issues = _issues_for(_ddl_with_field(
+        f"biz_scope varchar(16) NOT NULL DEFAULT '' COMMENT '{comment}'"
+    ))
+    assert len(_enum_hits(issues)) == 1
+
+
+def test_enum_text_type_flagged_when_text_check_off():
+    """项目把 TEXT 检查置 off 时，TEXT 族字段的枚举规则兜底，不留检查真空。"""
+    issues = _issues_for(
+        _ddl_with_field("payload_body text COMMENT '报文载荷[10-A,20-B]'"),
+        config={"text_type_severity": "off"},
+    )
+    assert len(_enum_hits(issues)) == 1
+    assert not any(i.rule == "禁用类型" for i in issues)
+
+
+def test_enum_decimal_domain_not_flagged():
+    """小数形态的值域（[0.00,100.00]）按数值区间处理，不报枚举。"""
+    issues = _issues_for(_ddl_with_field(
+        "amount_scope varchar(32) NOT NULL DEFAULT '' COMMENT '金额取值[0.00,100.00]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_multi_value_list_suffix_not_flagged():
+    """列表列名后缀（_ids）即使注释含值域也不报。"""
+    issues = _issues_for(_ddl_with_field(
+        "msg_type_ids varchar(64) NOT NULL DEFAULT '' COMMENT '消息类型[10-A,20-B]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_del_flag_exempt():
+    """del_flag 是规范固定字段（[0-否,1-是]），不按业务枚举重复报告。
+
+    其类型须为 tinyint（规范 §四），属人工确认项，见 ddl-manual-rules。
+    """
+    issues = _issues_for(_ddl_with_field(
+        "del_flag varchar(1) NOT NULL DEFAULT '0' COMMENT '删除标志[0-否,1-是]'"
+    ))
+    assert not _enum_hits(issues)
+
+
+def test_enum_rule_disabled_by_config():
+    """enum_field_type_check=false → 关闭枚举检查。"""
+    config = ddl_check.load_config()[0]
+    config["enum_field_type_check"] = False
+    issues = _issues_for(_ddl_with_field(
+        "auth_type varchar(32) NOT NULL DEFAULT '' COMMENT '鉴权类型[10-NONE,20-HMAC]'"
+    ), config=config)
+    assert not _enum_hits(issues)
+
+
+# ── 字段长度上限（命名模式规则，非字段名白名单）──────────────────────────
+
+def _length_hits(issues):
+    return [i for i in issues if i.rule == "字段长度上限"]
+
+
+def test_length_rule_id_suffix_over_limit_mandatory():
+    """*_id 字段超过上限 36 → 强制。"""
+    issues = _issues_for(_ddl_with_field("co_id varchar(64) NOT NULL DEFAULT '' COMMENT '公司id'"))
+    hits = _length_hits(issues)
+    assert len(hits) == 1 and hits[0].severity == Severity.MANDATORY
+
+
+def test_length_rule_key_suffix_not_checked_by_default():
+    """默认规则只约束 *_id；*_key（access_key/biz_key 等长标识）默认不报。"""
+    issues = _issues_for(_ddl_with_field("app_key varchar(64) NOT NULL DEFAULT '' COMMENT '应用Key'"))
+    assert not _length_hits(issues)
+
+
+def test_length_rule_first_match_wins_allows_specific_exception():
+    """更具体的模式前置可放宽单族字段，且不叠加后续规则。"""
+    config = ddl_check.load_config()[0]
+    config["field_length_rules"] = [
+        {"pattern": r"(^|_)idemp_id$", "max": 64},
+        {"pattern": r"(^|_)id$", "max": 36},
+    ]
+    idemp = _issues_for(
+        _ddl_with_field("evt_idemp_id varchar(64) NOT NULL DEFAULT '' COMMENT '事件幂等id'"),
+        config=config,
+    )
+    assert not _length_hits(idemp)
+    plain = _issues_for(
+        _ddl_with_field("co_id varchar(64) NOT NULL DEFAULT '' COMMENT '公司id'"),
+        config=config,
+    )
+    assert _length_hits(plain)
+
+
+def test_length_rule_at_or_below_limit_ok():
+    """上限判定为「不超过」：36 与更短的 32 均合规。"""
+    for length in (36, 32):
+        issues = _issues_for(
+            _ddl_with_field(f"mch_id varchar({length}) NOT NULL DEFAULT '' COMMENT '商户id'")
+        )
+        assert not _length_hits(issues), length
+
+
+def test_length_rule_requires_token_boundary():
+    """仅按分词边界匹配：paid/valid 这类普通词不以 id 分词结尾，不报。"""
+    issues = _issues_for(_ddl_with_field("is_paid varchar(64) NOT NULL DEFAULT '' COMMENT '是否支付'"))
+    assert not _length_hits(issues)
+
+
+def test_length_rule_plural_list_not_matched():
+    """复数/列表列（*_ids）不是单值标识符，不匹配 (^|_)id$。"""
+    issues = _issues_for(
+        _ddl_with_field("cred_ids varchar(256) NOT NULL DEFAULT '' COMMENT '凭证id列表'")
+    )
+    assert not _length_hits(issues)
+
+
+def test_length_rule_ignores_non_string_type():
+    """非 char/varchar 类型（bigint）不在长度规则范围。"""
+    issues = _issues_for(_ddl_with_field("co_id bigint(20) NOT NULL DEFAULT 0 COMMENT '公司id'"))
+    assert not _length_hits(issues)
+
+
+def test_length_rule_override_by_config(tmp_path):
+    """配置整体替换规则集（id 上限放宽到 64）→ 不再报。"""
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"field_length_rules": [{"pattern": "(^|_)id$", "max": 64}]}),
+        encoding="utf-8",
+    )
+    cfg, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error is None
+    issues = _issues_for(
+        _ddl_with_field("co_id varchar(64) NOT NULL DEFAULT '' COMMENT '公司id'"),
+        config=cfg,
+    )
+    assert not _length_hits(issues)
+
+
+def test_length_rule_empty_list_disables_check(tmp_path):
+    """field_length_rules=[] → 关闭长度上限检查。"""
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"field_length_rules": []}), encoding="utf-8"
+    )
+    cfg, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error is None
+    issues = _issues_for(
+        _ddl_with_field("co_id varchar(64) NOT NULL DEFAULT '' COMMENT '公司id'"),
+        config=cfg,
+    )
+    assert not _length_hits(issues)
+
+
+def test_length_rule_custom_pattern_applies():
+    """自定义模式（*_name 上限 20）立即生效——规则可扩展，无需改代码。"""
+    config = ddl_check.load_config()[0]
+    config["field_length_rules"] = [{"pattern": r"(^|_)name$", "max": 20}]
+    issues = _issues_for(
+        _ddl_with_field("msg_type_name varchar(50) NOT NULL DEFAULT '' COMMENT '消息类型名称'"),
+        config=config,
+    )
+    assert _length_hits(issues)
+
+
+def test_length_rule_recommended_severity():
+    """规则可声明推荐级别，避免全部强制。"""
+    config = ddl_check.load_config()[0]
+    config["field_length_rules"] = [
+        {"pattern": r"(^|_)id$", "max": 36, "severity": "recommended"}
+    ]
+    issues = _issues_for(
+        _ddl_with_field("co_id varchar(64) NOT NULL DEFAULT '' COMMENT '公司id'"),
+        config=config,
+    )
+    hits = _length_hits(issues)
+    assert len(hits) == 1 and hits[0].severity == Severity.RECOMMENDED
+
+
+# ── TEXT 族级别可配置（规范默认强制，可按项目降级/关闭）─────────────────
+
+def test_text_type_default_mandatory():
+    """默认配置：text 为强制（与规范【强制】一致）。"""
+    issues = _issues_for(_ddl_with_field("payload text COMMENT '报文载荷'"))
+    hits = [i for i in issues if i.rule == "禁用类型"]
+    assert hits and hits[0].severity == Severity.MANDATORY
+
+
+def test_text_type_recommended_by_config():
+    """text_type_severity=recommended → text 降为推荐级。"""
+    config = ddl_check.load_config()[0]
+    config["text_type_severity"] = "recommended"
+    issues = _issues_for(_ddl_with_field("payload text COMMENT '报文载荷'"), config=config)
+    hits = [i for i in issues if i.rule == "禁用类型"]
+    assert hits and hits[0].severity == Severity.RECOMMENDED
+
+
+def test_text_type_off_by_config():
+    """text_type_severity=off → text 不检查。"""
+    config = ddl_check.load_config()[0]
+    config["text_type_severity"] = "off"
+    issues = _issues_for(_ddl_with_field("payload text COMMENT '报文载荷'"), config=config)
+    assert not [i for i in issues if i.rule == "禁用类型"]
+
+
+def test_blob_still_mandatory_when_text_downgraded():
+    """配置只影响 TEXT 族，blob 恒为强制。"""
+    config = ddl_check.load_config()[0]
+    config["text_type_severity"] = "off"
+    issues = _issues_for(_ddl_with_field("attach_blob blob COMMENT '附件内容'"), config=config)
+    hits = [i for i in issues if i.rule == "禁用类型"]
+    assert hits and hits[0].severity == Severity.MANDATORY
+
+
+# ── 配置加载 ─────────────────────────────────────────────────────────────
+
+def test_load_config_defaults():
+    cfg, error = ddl_check.load_config()
+    assert error is None
+    assert cfg["text_type_severity"] == "mandatory"
+    assert cfg["enum_field_type_check"] is True
+    assert cfg["field_length_rules"] == ddl_check.DEFAULT_CONFIG["field_length_rules"]
+
+
+def test_load_config_autodiscover(tmp_path):
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"text_type_severity": "recommended"}), encoding="utf-8"
+    )
+    cfg, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error is None and cfg["text_type_severity"] == "recommended"
+
+
+def test_load_config_keeps_untouched_defaults(tmp_path):
+    """只配置一项时，其余默认项保留。"""
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"enum_field_type_check": False}), encoding="utf-8"
+    )
+    cfg, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error is None
+    assert cfg["enum_field_type_check"] is False
+    assert cfg["text_type_severity"] == "mandatory"
+    assert cfg["field_length_rules"]  # 默认模式规则仍在
+
+
+def test_load_config_missing_explicit_path(tmp_path):
+    _, error = ddl_check.load_config(str(tmp_path / "nope.json"))
+    assert error and "不存在" in error
+
+
+def test_load_config_invalid_severity(tmp_path):
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"text_type_severity": "warn"}), encoding="utf-8"
+    )
+    _, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error and "text_type_severity" in error
+
+
+def test_load_config_invalid_rule_max(tmp_path):
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"field_length_rules": [{"pattern": "(^|_)id$", "max": "36"}]}),
+        encoding="utf-8",
+    )
+    _, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error and "max" in error
+
+
+def test_load_config_invalid_rule_pattern(tmp_path):
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"field_length_rules": [{"pattern": "([", "max": 36}]}), encoding="utf-8"
+    )
+    _, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error and "正则非法" in error
+
+
+def test_load_config_invalid_rule_severity(tmp_path):
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"field_length_rules": [
+            {"pattern": "(^|_)id$", "max": 36, "severity": "warn"}]}), encoding="utf-8"
+    )
+    _, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error and "severity" in error
+
+
+def test_load_config_broken_json(tmp_path):
+    (tmp_path / ".ddl-guard.json").write_text("{not json", encoding="utf-8")
+    _, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error and "解析失败" in error
+
+
+def test_load_config_unknown_key_rejected(tmp_path):
+    """键名拼错（text_severity）必须报错，不得静默按默认值跑（fail-open 防线）。"""
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"text_severity": "off"}), encoding="utf-8"
+    )
+    _, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error and "未识别" in error and "text_severity" in error
+
+
+def test_load_config_unknown_rule_key_rejected(tmp_path):
+    """规则项内键名多余/拼错（note、max_len）必须报错，否则该项静默失效。"""
+    for extra in ({"note": "幂等键 36"}, {"max_len": 36}):
+        item = {"pattern": "(^|_)id$", "max": 36}
+        item.update(extra)
+        (tmp_path / ".ddl-guard.json").write_text(
+            json.dumps({"field_length_rules": [item]}), encoding="utf-8"
+        )
+        _, error = ddl_check.load_config(base_dir=str(tmp_path))
+        assert error and "未识别的键" in error
+        assert next(iter(extra)) in error
+
+
+def test_load_config_walk_up_to_project_root(tmp_path):
+    """配置放项目根、审查子目录时仍能自动发现（向上回溯到 .git 为止）。"""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"text_type_severity": "recommended"}), encoding="utf-8"
+    )
+    nested = tmp_path / "db" / "migration"
+    nested.mkdir(parents=True)
+    cfg, error = ddl_check.load_config(base_dir=str(nested))
+    assert error is None and cfg["text_type_severity"] == "recommended"
+
+
+def test_load_config_walk_up_stops_at_git_root(tmp_path):
+    """越过项目根（含 .git 的目录）后不再向上找，避免误读上级目录配置。"""
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"text_type_severity": "off"}), encoding="utf-8"
+    )
+    project = tmp_path / "proj"
+    (project / ".git").mkdir(parents=True)
+    nested = project / "db"
+    nested.mkdir()
+    cfg, error = ddl_check.load_config(base_dir=str(nested))
+    assert error is None and cfg["text_type_severity"] == "mandatory"
+    assert cfg["_source"] is None
+
+
+def test_load_config_records_source(tmp_path):
+    """生效配置来源记入 _source（报告可溯源降级/替换）。"""
+    (tmp_path / ".ddl-guard.json").write_text("{}\n", encoding="utf-8")
+    cfg, error = ddl_check.load_config(base_dir=str(tmp_path))
+    assert error is None
+    assert cfg["_source"] == str((tmp_path / ".ddl-guard.json").resolve())
+
+
+@pytest.mark.parametrize("payload", [
+    {"enum_field_type_check": "false"},
+    {"field_length_rules": {}},
+    {"field_length_rules": ["x"]},
+    {"field_length_rules": [{"max": 10}]},
+    [],
+])
+def test_main_config_fail_closed_exit2(monkeypatch, capsys, tmp_path, payload):
+    """各类非法配置一律退出码 2（fail-closed），不静默回落默认值。"""
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(payload), encoding="utf-8")
+    path = _write_tmp_sql("CREATE TABLE t (id bigint COMMENT '主键') COMMENT='t';\n")
+    try:
+        monkeypatch.setattr(sys, "argv", ["ddl_check", path, "--config", str(bad)])
+        assert ddl_check.main() == 2
+        assert "配置错误" in capsys.readouterr().err
+    finally:
+        os.unlink(path)
+
+
+def test_main_reports_effective_config(monkeypatch, capsys, tmp_path):
+    """降级/替换生效时在 stderr 声明，报告不得让读者以为仍是全量【强制】检查。"""
+    cfg_path = tmp_path / ".ddl-guard.json"
+    cfg_path.write_text(json.dumps({
+        "text_type_severity": "off",
+        "enum_field_type_check": False,
+        "field_length_rules": [{"pattern": "(^|_)code$", "max": 64}],
+    }), encoding="utf-8")
+    path = _write_tmp_sql("CREATE TABLE t (id bigint COMMENT '主键') COMMENT='t';\n")
+    try:
+        monkeypatch.setattr(sys, "argv", ["ddl_check", path, "--config", str(cfg_path)])
+        ddl_check.main()
+        err = capsys.readouterr().err
+        assert "生效配置" in err
+        assert "text_type_severity=off" in err
+        assert "enum_field_type_check=false" in err
+        assert "当前无规则覆盖 *_id" in err
+    finally:
+        os.unlink(path)
+
+
+def test_main_warns_when_id_cap_widened(monkeypatch, capsys, tmp_path):
+    """规则仍覆盖 *_id 但把上限放宽（如 `.*` → 64）时也要提示，不能默不作声。"""
+    cfg_path = tmp_path / ".ddl-guard.json"
+    cfg_path.write_text(json.dumps({
+        "field_length_rules": [{"pattern": ".*", "max": 64}],
+    }), encoding="utf-8")
+    path = _write_tmp_sql("CREATE TABLE t (id bigint COMMENT '主键') COMMENT='t';\n")
+    try:
+        monkeypatch.setattr(sys, "argv", ["ddl_check", path, "--config", str(cfg_path)])
+        ddl_check.main()
+        err = capsys.readouterr().err
+        assert "首个命中规则的上限为 64" in err
+    finally:
+        os.unlink(path)
+
+
+@pytest.mark.parametrize("rules", [
+    [{"pattern": "(^|_)id$", "max": 36}],                              # 边界：等于默认值
+    [{"pattern": "(^|_)id$", "max": 32}],                              # 收紧
+    [{"pattern": "(^|_)idemp_id$", "max": 64},
+     {"pattern": "(^|_)id$", "max": 36}],                              # 具体族前置 + 兜底
+])
+def test_main_no_warn_when_id_rule_tightened_or_specific(monkeypatch, capsys,
+                                                         tmp_path, rules):
+    """上限不变/收紧/具体族前置属正常用法，stderr 不得出现上限提示（边界 36 也不提示）。"""
+    cfg_path = tmp_path / ".ddl-guard.json"
+    cfg_path.write_text(json.dumps({"field_length_rules": rules}), encoding="utf-8")
+    path = _write_tmp_sql("CREATE TABLE t (id bigint COMMENT '主键') COMMENT='t';\n")
+    try:
+        monkeypatch.setattr(sys, "argv", ["ddl_check", path, "--config", str(cfg_path)])
+        ddl_check.main()
+        err = capsys.readouterr().err
+        assert "首个命中规则的上限为" not in err
+    finally:
+        os.unlink(path)
+
+
+def test_id_length_cap_first_match_semantics():
+    """首个命中规则生效：前置的宽松规则若先命中，实际上限就是它。"""
+    rules = [{"pattern": "(^|_)co_id$", "max": 128},
+             {"pattern": "(^|_)id$", "max": 36}]
+    assert ddl_check.id_length_cap(rules) == 128
+    assert ddl_check.id_length_cap([]) is None
+    assert ddl_check.id_length_cap([{"pattern": "(^|_)code$", "max": 64}]) is None
+
+
+def test_main_invalid_config_exit2(monkeypatch, capsys, tmp_path):
+    """配置非法 → 退出码 2（fail-closed，不静默用默认值放行）。"""
+    bad = tmp_path / "bad.json"
+    bad.write_text(
+        json.dumps({"field_length_rules": [{"pattern": "(^|_)id$", "max": -1}]}),
+        encoding="utf-8",
+    )
+    path = _write_tmp_sql("CREATE TABLE t (id bigint COMMENT '主键') COMMENT='t';\n")
+    try:
+        monkeypatch.setattr(sys, "argv", ["ddl_check", path, "--config", str(bad)])
+        assert ddl_check.main() == 2
+        assert "配置错误" in capsys.readouterr().err
+    finally:
+        os.unlink(path)
+
+
+def test_main_autodiscover_config_downgrades_text(monkeypatch, tmp_path):
+    """.ddl-guard.json 自动发现生效：text 降级后不再有强制问题。"""
+    ddl = _ddl_with_field("payload text COMMENT '报文载荷'")
+    (tmp_path / "a.sql").write_text(ddl, encoding="utf-8")
+    (tmp_path / ".ddl-guard.json").write_text(
+        json.dumps({"text_type_severity": "recommended"}), encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "argv", ["ddl_check", str(tmp_path)])
+    assert ddl_check.main() == 0

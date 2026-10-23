@@ -179,6 +179,20 @@ TEMPLATES = [
     ("varchar长度", "varchar-length", "varchar 长度",
      [("    order_no        varchar(36)", "    order_no        varchar(501)")],
      [("    order_no        varchar(36)", "    order_no        varchar(500)")]),
+    ("字段长度上限", "field-length-max", "标识字段长度超限",
+     # 标识类字段（默认仅 *_id）长度上限 36，64 触发强制
+     [("    order_no        varchar(36)    NOT NULL COMMENT '订单编号',",
+       "    order_no        varchar(36)    NOT NULL COMMENT '订单编号',\n"
+       "    co_id           varchar(64)    NOT NULL COMMENT '公司id',")],
+     [("    order_no        varchar(36)    NOT NULL COMMENT '订单编号',",
+       "    order_no        varchar(36)    NOT NULL COMMENT '订单编号',\n"
+       "    co_id           varchar(36)    NOT NULL COMMENT '公司id',")]),
+    ("枚举字段类型", "enum-field-type", "枚举字段类型",
+     # 注释声明枚举值域却仍用 varchar → 应落 tinyint 数字码
+     [("COMMENT '订单状态'", "COMMENT '订单状态[enabled,disabled]'")],
+     [("    order_status    varchar(10)    NOT NULL COMMENT '订单状态',",
+       "    order_status    tinyint(4)     NOT NULL COMMENT '订单状态[10-启用,20-禁用]',")]),
+
     ("char长度", "char-length", "char 长度",
      [("    order_status    varchar(10)", "    order_code      char(21)")],
      [("    order_status    varchar(10)", "    order_code      char(20)")]),

@@ -16,6 +16,9 @@ python3 scripts/ddl_check.py
 # 审查指定 DDL 文件
 python3 scripts/ddl_check.py path/to/file.sql
 
+# 显式指定项目配置（默认自动查找 .ddl-guard.json）
+python3 scripts/ddl_check.py path/to/file.sql --config .ddl-guard.json
+
 # 审查所有 MyBatis SQL 和 PO 类（Java 项目）
 python3 scripts/sql_check.py
 
@@ -28,6 +31,43 @@ python3 scripts/sql_check.py path/to/project/ --format json
 ```
 
 **退出码**：`0` = 通过，`1` = 有强制问题，`2` = 运行错误
+
+## 项目级配置（可选）
+
+`.ddl-guard.json` 放在项目根或审查路径下即可自动生效（查找顺序：`--config` > 从审查路径向上
+回溯 > 从当前目录向上回溯，均到项目根 `.git` 为止）；不配置时行为与规范【强制】条款一致
+（含技能级扩展规则，见下）。配置只调节**检查级别与基线数据**，不改写规范正文；配置非法
+（未知配置项、取值非法、正则非法、上限非正整数）以退出码 `2` 失败，不静默回落默认值。
+生效配置来源与被降级/替换的检查会打印到 stderr，避免"报告说通过、实际少查一类"。
+
+```json
+{
+  "text_type_severity": "recommended",
+  "enum_field_type_check": true,
+  "field_length_rules": [
+    {"pattern": "(^|_)idemp_id$", "max": 64},
+    {"pattern": "(^|_)id$", "max": 36}
+  ]
+}
+```
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `text_type_severity` | `mandatory` | TEXT 族（text/tinytext/mediumtext/longtext）级别：`mandatory`/`recommended`/`off`。DBA 审批允许保留大文本载荷的项目可降级，blob/json 等恒为强制 |
+| `enum_field_type_check` | `true`（开启） | 置 `false` 才关闭「注释声明枚举值域却用字符串类型」检查 |
+| `field_length_rules` | `*_id ≤ 36` | 命名模式规则（**非字段名白名单**）：`pattern` 对字段小写名 `re.search`，`max` 为长度上限，`severity` 可选 `mandatory`/`recommended`；首个命中规则生效，特殊字段族用更具体模式前置放宽。规则项**只接受这三个键**（多余键视为配置错误，退出码 2）。**该项整体替换默认集**——新增约束时须把 `*_id` 规则一并写出，否则内置的 `*_id ≤ 36` 强制检查会静默消失（脚本在 stderr 提示） |
+
+规则是模式化的而非逐字段枚举：`*_id` 类标识字段统一受 36 上限约束（UUID 带连字符长度），
+`*_ids`/`*_id_list` 等列表列不匹配；项目需要额外约束（如 `*_code` ≤ 64）或放宽某族
+（如幂等键 64）时只改配置，不改脚本：
+
+```json
+{"field_length_rules": [
+  {"pattern": "(^|_)idemp_id$", "max": 64},
+  {"pattern": "(^|_)id$", "max": 36},
+  {"pattern": "(^|_)code$", "max": 64}
+]}
+```
 
 ## 需人工补充的规则
 

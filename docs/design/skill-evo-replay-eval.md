@@ -204,7 +204,7 @@ def scorer_registry() -> dict
 用 `test/ddl-202607071777审查报告.md` 跑一遍提取，与报告原文人工比对，作为提取层上线门槛
 （对齐 evidence 逐字核验哲学）。已固化为测试 `test_extract_rules_against_real_report`
 （2026-09-03）：原报告（早于输出契约，无 JSON 清单）→ fail-closed 不臆造；报告实体 +
-契约清单（008-real expected 声明的 6 类脚本规则）→ 提取逐条一致。
+契约清单（008-real expected 声明的 7 类脚本规则）→ 提取逐条一致。
 
 ### 5.3 `evo.py` CLI 扩展
 

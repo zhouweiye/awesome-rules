@@ -660,7 +660,7 @@ def test_extract_rules_against_real_report():
     """对真实人工审查报告跑提取：
     ① 原报告早于输出契约（无 JSON 规则清单）→ fail-closed ([], False)，
        不从叙述性正文臆造规则；
-    ② 报告按输出契约补 JSON 清单（008-real expected 声明的 6 类脚本规则，
+    ② 报告按输出契约补 JSON 清单（008-real expected 声明的 7 类脚本规则，
        源自 ddl_check 对同一 DDL 的实测检出）→ 提取结果与清单逐条一致。"""
     import json
     skill_dir = Path(__file__).resolve().parents[3] / "ddl-guard"

@@ -2,16 +2,18 @@
 """
 DDL 规范检查脚本
 用法:
-  python3 ddl_check.py <file_or_dir> [--spec <spec_file>] [--format text|json]
+  python3 ddl_check.py <file_or_dir> [--config .ddl-guard.json] [--format text|json]
 
 检查规则参照 steering/database-design-specification.md
-退出码: 0=通过(无强制问题), 1=有强制问题, 2=运行错误
+退出码: 0=通过(无强制问题), 1=有强制问题, 2=运行错误（含配置非法）
 """
 
 import argparse
+import json
 import os
 import re
 import sys
+from functools import partial
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional
@@ -118,6 +120,149 @@ REQUIRED_FIELDS = {
 ABBREVIATION_EXEMPT_FIELDS = {
     "del_flag",       # 逻辑删除标志（标准字段名）
 }
+
+
+# ── 项目级配置（.ddl-guard.json）────────────────────────────────────────
+# 配置只调节「检查级别 / 基线数据」，不改变规范正文；未配置时的行为与
+# steering/database-design-specification.md 的【强制】条款一致。
+CONFIG_FILENAME = ".ddl-guard.json"
+
+# TEXT 族类型：规范 §四【强制】禁止，但大文本载荷在部分项目经 DBA 审批保留，
+# 其级别可经配置降级或关闭（见 text_type_severity）。
+TEXT_FAMILY_TYPES = ("text", "tinytext", "mediumtext", "longtext")
+TEXT_SEVERITY_CHOICES = ("mandatory", "recommended", "off")
+
+DEFAULT_CONFIG = {
+    # TEXT 族处置级别：mandatory(默认，规范【强制】)/recommended(降级)/off(不检查)
+    "text_type_severity": "mandatory",
+    # 枚举字段类型检查：注释声明了枚举值域却用字符串类型
+    "enum_field_type_check": True,
+    # 字段长度上限规则：命名模式驱动（非字段名白名单，无法穷举）。
+    # 每项 {pattern: 正则(对字段小写名 re.search), max: 上限, severity}；
+    # 首个命中的规则生效（可用更具体的模式前置放宽），配置该项即整体替换默认集。
+    "field_length_rules": [
+        {"pattern": r"(^|_)id$", "max": 36, "severity": "mandatory"},
+    ],
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """递归合并配置（override 覆盖 base），返回新对象，不修改入参。"""
+    merged = json.loads(json.dumps(base))
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _validate_config(cfg: dict) -> Optional[str]:
+    """校验配置取值，返回错误信息（None 表示合法）。"""
+    severity = cfg.get("text_type_severity")
+    if severity not in TEXT_SEVERITY_CHOICES:
+        return (f"text_type_severity 取值非法: {severity!r}，"
+                f"可选 {'/'.join(TEXT_SEVERITY_CHOICES)}")
+    if not isinstance(cfg.get("enum_field_type_check"), bool):
+        return f"enum_field_type_check 须为布尔值: {cfg.get('enum_field_type_check')!r}"
+
+    rules = cfg.get("field_length_rules")
+    if not isinstance(rules, list):
+        return "field_length_rules 须为数组，形如 [{\"pattern\": \"(^|_)id$\", \"max\": 36}]"
+    for item in rules:
+        if not isinstance(item, dict):
+            return f"field_length_rules 每项须为对象: {item!r}"
+        rule_unknown = sorted(set(item) - {"pattern", "max", "severity"})
+        if rule_unknown:
+            return (f"field_length_rules 某项含未识别的键 {', '.join(rule_unknown)}"
+                    f"（可用: pattern, max, severity）: {item!r}")
+        pattern = item.get("pattern")
+        if not isinstance(pattern, str) or not pattern:
+            return f"field_length_rules 某项缺少 pattern: {item!r}"
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            return f"field_length_rules 正则非法 {pattern!r}: {exc}"
+        max_len = item.get("max")
+        if isinstance(max_len, bool) or not isinstance(max_len, int) or max_len <= 0:
+            return f"field_length_rules 某项 max 须为正整数: {item!r}"
+        rule_severity = item.get("severity", "mandatory")
+        if rule_severity not in ("mandatory", "recommended"):
+            return f"field_length_rules 某项 severity 非法: {rule_severity!r}"
+    return None
+
+
+def load_config(config_path: Optional[str] = None,
+                base_dir: Optional[str] = None) -> tuple:
+    """加载项目配置，返回 (config, error)。
+
+    查找顺序：--config 显式路径 > 从 base_dir 向上回溯 > 从 cwd 向上回溯。
+    回溯在遇到含 `.git` 的目录（项目根）后停止，避免误读上级目录的无关配置。
+    显式路径不存在/键名拼错视为错误（防笔误后静默用默认值）；自动查找未命中
+    用默认配置。生效配置来源记在 config["_source"]。
+    """
+    path = config_path
+    if path is None:
+        for start in filter(None, (base_dir, os.getcwd())):
+            path = _discover_config(start)
+            if path:
+                break
+
+    cfg = json.loads(json.dumps(DEFAULT_CONFIG))
+    cfg["_source"] = None
+    if path is None:
+        return cfg, None
+    if not os.path.isfile(path):
+        return cfg, f"配置文件不存在: {path}"
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            user_cfg = json.load(fh)
+    except (OSError, ValueError) as exc:
+        return cfg, f"配置文件解析失败: {path}: {exc}"
+    if not isinstance(user_cfg, dict):
+        return cfg, f"配置文件顶层须为 JSON 对象: {path}"
+
+    unknown = sorted(set(user_cfg) - set(DEFAULT_CONFIG))
+    if unknown:
+        return cfg, (f"未识别的配置项 {', '.join(unknown)}"
+                     f"（可用: {', '.join(sorted(DEFAULT_CONFIG))}）: {path}")
+
+    cfg = _deep_merge(cfg, user_cfg)
+    cfg["_source"] = os.path.abspath(path)
+    error = _validate_config(cfg)
+    return cfg, error
+
+
+def _discover_config(start_dir: str) -> Optional[str]:
+    """从 start_dir 向上回溯查找配置文件，到项目根（含 .git）或文件系统根停止。"""
+    try:
+        current = Path(start_dir).resolve()
+    except OSError:  # pragma: no cover - 路径不可解析时等同未找到
+        return None
+    while True:
+        candidate = current / CONFIG_FILENAME
+        if candidate.is_file():
+            return str(candidate)
+        if (current / ".git").exists() or current.parent == current:
+            return None
+        current = current.parent
+
+
+def id_length_cap(rules: Optional[list]) -> Optional[int]:
+    """按「首个命中规则生效」模拟出 `*_id`（以 co_id 代表）适用的长度上限。
+
+    返回 None 表示无规则覆盖该形态；用于提示配置是否把内置默认上限替换掉了。
+    """
+    for rule in rules or []:
+        pattern, max_len = rule.get("pattern"), rule.get("max")
+        if not isinstance(pattern, str) or not isinstance(max_len, int):
+            continue
+        try:
+            if re.search(pattern, "co_id"):
+                return max_len
+        except re.error:  # pragma: no cover - 非法正则已由 _validate_config 拦截
+            continue
+    return None
 
 # ── 泛化字段名（缺乏主体区分的单一名词，应加前缀）──────────────────────
 GENERIC_FIELD_NAMES = {
@@ -983,23 +1128,169 @@ def check_field_comment(field: FieldInfo, table_name: str, issues: list):
             ))
 
 
-def check_field_type(field: FieldInfo, table_name: str, issues: list):
-    """Check for forbidden field types."""
-    type_lower = field.type.lower().strip()
+def _base_type(field: FieldInfo) -> str:
+    """字段类型的基类型（去掉长度/精度），如 varchar(36) → varchar。"""
+    match = re.match(r"(\w+)", field.type.strip().lower())
+    return match[1] if match else ""
 
-    # Extract base type name
-    base_type_match = re.match(r"(\w+)", type_lower)
-    if not base_type_match:
+
+def check_field_type(field: FieldInfo, table_name: str, issues: list,
+                     config: Optional[dict] = None):
+    """Check for forbidden field types.
+
+    TEXT 族（text/tinytext/mediumtext/longtext）的级别由配置
+    text_type_severity 决定（默认 mandatory，与规范【强制】一致）：
+    recommended=降级为建议，off=不检查。其余禁用类型（blob/json/enum/
+    set/timestamp/float/double 等）恒为强制。
+    """
+    base_type = _base_type(field)
+    if not base_type or base_type not in FORBIDDEN_TYPES:
         return
-    base_type = base_type_match[1]
 
-    if base_type in FORBIDDEN_TYPES:
+    severity = Severity.MANDATORY
+    if base_type in TEXT_FAMILY_TYPES:
+        cfg = config if config is not None else DEFAULT_CONFIG
+        policy = cfg.get("text_type_severity", "mandatory")
+        if policy == "off":
+            return
+        if policy == "recommended":
+            severity = Severity.RECOMMENDED
+
+    issues.append(Issue(
+        table=table_name, severity=severity, rule="禁用类型",
+        location=f"表:{table_name} 字段:{field.name}",
+        description=f"字段 {field.name} 使用了禁用类型 {field.type}",
+        suggestion=FORBIDDEN_TYPES[base_type],
+    ))
+
+
+# ── 枚举字段类型：注释声明了枚举值域却仍是字符串类型 ────────────────────
+# 依据：规范 §四「禁止 enum 类型（枚举/时间改 tinyint/datetime）」+ §五
+# 注释枚举信息格式——枚举值域应落 tinyint 数字码，语义映射归代码枚举。
+# 只在注释显式声明了 ≥2 个值的值域时触发：仅凭字段名（如 order_status）
+# 无法判断是否枚举，不产生误报。
+STRING_FIELD_TYPES = ("char", "varchar")
+# del_flag 是规范固定字段（[0-否,1-是]），业务枚举语义不适用；其**类型**规范
+# 要求 tinyint，属人工确认项（见 ddl-manual-rules），此处豁免避免与逻辑删除
+# 规则族重复报告。
+ENUM_EXEMPT_FIELDS = {"del_flag"}
+# 多值列表列（逗号分隔存储）不是枚举，值域是候选项集合而非单值状态机
+MULTI_VALUE_NAME_SUFFIXES = ("_list", "_lines", "_ids", "_codes", "_set", "_arr", "_items")
+MULTI_VALUE_COMMENT_HINTS = ("逗号分隔", "列表", "多选", "集合")
+# 区间/范围（如「费率区间[0,100]」）是数值上下界，不是枚举值域。
+# 仅在值域**全为数字**时才按区间放过——注释里出现「业务范围/适用范围」这类业务词
+# 不改变值域形态，否则真实枚举会被静默漏报。
+RANGE_COMMENT_HINTS = ("区间", "范围", "range")
+
+
+def _is_numeric_domain(values: list) -> bool:
+    """值域是否全为数字（`10` / `0.5` 形态），用于区分数值区间与枚举值域。"""
+    return all(re.fullmatch(r"\d+(?:\.\d+)?", value) for value in values)
+
+
+def _enum_domains(comment: str) -> list:
+    """提取注释中声明的枚举值域（[..] 且 ≥2 个值），返回 [[值, 值], ...]。
+
+    小数形态（`[0.00,100.00]`）按数值区间处理，不算枚举值域。
+    """
+    domains = []
+    for match in re.finditer(r"\[([^\[\]]*)\]", comment):
+        values = [seg.strip() for seg in match.group(1).split(",") if seg.strip()]
+        if len(values) < 2:
+            continue
+        if any(re.fullmatch(r"\d+\.\d+", value) for value in values):
+            continue
+        domains.append(values)
+    return domains
+
+
+def check_enum_field_type(field: FieldInfo, table_name: str, issues: list,
+                          config: Optional[dict] = None):
+    """枚举值域注释 + 字符串类型 → 强制改 tinyint 数字码。"""
+    cfg = config if config is not None else DEFAULT_CONFIG
+    if not cfg.get("enum_field_type_check", True):
+        return
+    name_low = field.name.lower()
+    if name_low in ENUM_EXEMPT_FIELDS:
+        return
+    base_type = _base_type(field)
+    if base_type in TEXT_FAMILY_TYPES:
+        # TEXT 族默认由「禁用类型」报告（同一字段双报会给出互相矛盾的建议）；
+        # 项目把 TEXT 检查置 off 时，由本规则兜底，避免该形态成为检查真空。
+        if cfg.get("text_type_severity") != "off":
+            return
+    elif base_type not in STRING_FIELD_TYPES:
+        return
+    if not field.comment:
+        return
+    if name_low.endswith(MULTI_VALUE_NAME_SUFFIXES):
+        return
+    if any(hint in field.comment for hint in MULTI_VALUE_COMMENT_HINTS):
+        return
+    domains = _enum_domains(field.comment)
+    if not domains:
+        return
+    if (any(hint in field.comment.lower() for hint in RANGE_COMMENT_HINTS)
+            and all(_is_numeric_domain(values) for values in domains)):
+        return
+    domain_text = " ".join("[" + ",".join(values) + "]" for values in domains)
+    issues.append(Issue(
+        table=table_name, severity=Severity.MANDATORY, rule="枚举字段类型",
+        location=f"表:{table_name} 字段:{field.name}",
+        description=(f"字段 {field.name} 类型为 {field.type}，"
+                     f"但注释声明了枚举值域 {domain_text}"),
+        suggestion=("枚举值域应落数字码：类型改 tinyint(4)，注释写 "
+                    "[10-值1,20-值2]，语义映射归代码枚举"),
+    ))
+
+
+# ── 字段长度上限：命名模式规则 ───────────────────────────────────────────
+def _char_length(field: FieldInfo) -> Optional[int]:
+    """取 char/varchar 的声明长度，非定长字符串类型返回 None。"""
+    match = re.match(r"(?:var)?char\s*\(\s*(\d+)\s*\)", field.type.strip().lower())
+    return int(match[1]) if match else None
+
+
+def check_field_length_rule(field: FieldInfo, table_name: str, issues: list,
+                            config: Optional[dict] = None):
+    """标识类字段长度上限（命名模式规则，不做字段名白名单枚举）。
+
+    默认规则：`*_id` 字段长度 ≤ 36——标识符承载 UUID/雪花/业务编号，36 为
+    UUID 带连字符长度基线。判定为「不超过」而非「等于」：32 等更短长度合规。
+    复数/列表列（`*_ids`、`*_id_list`）不匹配 `(^|_)id$`，不报。
+
+    扩展：规则集可经 .ddl-guard.json 的 field_length_rules 整体替换，首个
+    命中的规则生效——需要特殊上限的字段族用更具体的模式前置，例如
+    {"pattern": "(^|_)idemp_id$", "max": 64} 放在通用 `_id` 规则之前。
+    """
+    length = _char_length(field)
+    if length is None:
+        return
+    cfg = config if config is not None else DEFAULT_CONFIG
+    name_low = field.name.lower()
+    base_type = _base_type(field)
+
+    for rule in cfg.get("field_length_rules") or []:
+        pattern = rule.get("pattern")
+        max_len = rule.get("max")
+        if not pattern or not isinstance(max_len, int):
+            continue  # 非法项由 _validate_config 拦截；此处防御性跳过
+        if not re.search(pattern, name_low):
+            continue
+        if length <= max_len:
+            return  # 命中规则但未超限，且后续规则不再叠加
+        severity = (Severity.RECOMMENDED if rule.get("severity") == "recommended"
+                    else Severity.MANDATORY)
         issues.append(Issue(
-            table=table_name, severity=Severity.MANDATORY, rule="禁用类型",
+            table=table_name, severity=severity, rule="字段长度上限",
             location=f"表:{table_name} 字段:{field.name}",
-            description=f"字段 {field.name} 使用了禁用类型 {field.type}",
-            suggestion=FORBIDDEN_TYPES[base_type],
+            description=(f"字段 {field.name} 长度为 {length}，"
+                         f"超出标识类字段上限 {max_len}（匹配 /{pattern}/）"),
+            suggestion=(f"改为 {base_type}({max_len})；确有更长的标识格式时，"
+                        f"在 .ddl-guard.json 的 field_length_rules 前置一条更具体的模式规则"),
         ))
+        return
+
 
 
 # ── TEXT/BLOB/JSON 族类型不允许 DEFAULT（MySQL 语法限制）──────────────────
@@ -1254,9 +1545,10 @@ def check_primary_key_int(table: TableInfo, issues: list):
 # ── 主检查流程 ──────────────────────────────────────────────────────────
 
 
-def check_file(file_path: str) -> list:
+def check_file(file_path: str, config: Optional[dict] = None) -> list:
     """Run all checks on a single file, return list of Issue."""
     issues = []
+    cfg = config if config is not None else DEFAULT_CONFIG
 
     with open(file_path, "r", encoding="utf-8") as fh:
         raw_text = fh.read()
@@ -1292,7 +1584,9 @@ def check_file(file_path: str) -> list:
         for field in table.fields:
             check_field_name(field, table.name, issues)
             check_field_comment(field, table.name, issues)
-            check_field_type(field, table.name, issues)
+            check_field_type(field, table.name, issues, cfg)
+            check_enum_field_type(field, table.name, issues, cfg)
+            check_field_length_rule(field, table.name, issues, cfg)
             check_text_default(field, table.name, issues)
             check_varchar_length(field, table.name, issues)
 
@@ -1353,13 +1647,50 @@ def format_report_json(file_path: str, issues: list) -> str:
     })
 
 
+def report_effective_config(config: dict) -> None:
+    """把生效配置与被降级/替换的检查打到 stderr（不污染 JSON stdout）。"""
+    source = config.get("_source")
+    if not source:
+        return
+    print(f"[ddl-guard] 生效配置: {source}", file=sys.stderr)
+    severity = config.get("text_type_severity")
+    if severity != "mandatory":
+        action = "已关闭" if severity == "off" else "已降级为推荐级"
+        print(f"[ddl-guard] 注意: text_type_severity={severity} → TEXT 族「禁用类型」{action}",
+              file=sys.stderr)
+    if config.get("enum_field_type_check") is False:
+        print("[ddl-guard] 注意: enum_field_type_check=false → 「枚举字段类型」检查已关闭",
+              file=sys.stderr)
+    cap = id_length_cap(config.get("field_length_rules"))
+    if cap is None:
+        print("[ddl-guard] 注意: field_length_rules 已替换内置默认集，当前无规则覆盖 *_id",
+              file=sys.stderr)
+    elif cap > 36:
+        # 只陈述「首个命中规则」的上限：更前置的具体规则可能让某些字段另有上限，
+        # 不能宣称 36 已全局放宽
+        print(f"[ddl-guard] 注意: field_length_rules 中 *_id 首个命中规则的上限为 {cap}"
+              f"（内置默认 36；更前置的具体规则对不同字段可能另有上限）",
+              file=sys.stderr)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DDL 规范检查脚本 - 检查 MySQL DDL 文件是否符合数据库设计开发规范"
     )
     parser.add_argument("path", nargs="?", default=".", help="SQL 文件或目录路径（默认当前目录）")
     parser.add_argument("--format", choices=["text", "json"], default="text", help="输出格式")
+    parser.add_argument(
+        "--config", default=None,
+        help=f"项目配置文件路径（默认自动查找 {CONFIG_FILENAME}）",
+    )
     args = parser.parse_args()
+
+    base_dir = args.path if os.path.isdir(args.path) else os.path.dirname(os.path.abspath(args.path))
+    config, config_error = load_config(args.config, base_dir)
+    if config_error:
+        print(f"配置错误: {config_error}", file=sys.stderr)
+        return 2
+    report_effective_config(config)
 
     sql_files = find_files(args.path, lambda f: f.endswith(".sql"))
     if not sql_files:
@@ -1367,7 +1698,7 @@ def main():
         return 2
 
     return run_gate(
-        [(f, check_file) for f in sql_files],
+        [(f, partial(check_file, config=config)) for f in sql_files],
         args.format, format_report_text, format_report_json,
     )
 

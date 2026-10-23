@@ -156,6 +156,14 @@ files:
   - badcase/074-atomic-field-name-chars/input/example.sql
   - badcase/075-atomic-del-flag-required/expected.md
   - badcase/075-atomic-del-flag-required/input/example.sql
+  - badcase/076-atomic-field-length-max/expected.md
+  - badcase/076-atomic-field-length-max/input/example.sql
+  - badcase/077-atomic-enum-field-type/expected.md
+  - badcase/077-atomic-enum-field-type/input/example.sql
+  - badcase/078-boundary-field-length-max/expected.md
+  - badcase/078-boundary-field-length-max/input/example.sql
+  - badcase/079-boundary-enum-field-type/expected.md
+  - badcase/079-boundary-enum-field-type/input/example.sql
   - ddl-manual-rules.md
   - eval/007-clean/expected.md
   - eval/007-clean/input/example.sql
@@ -190,6 +198,9 @@ files:
 # DDL 审查（.sql 建表语句）
 python3 scripts/ddl_check.py [--format json]
 
+# 指定项目配置（默认自动查找 .ddl-guard.json，见下节）
+python3 scripts/ddl_check.py <path> --config .ddl-guard.json
+
 # MyBatis SQL 审查（*Mapper.xml + @TableName PO 类，Java 项目）
 python3 scripts/sql_check.py [--format json]
 ```
@@ -202,7 +213,7 @@ python3 scripts/sql_check.py [--format json]
 
 #### 本版本新增 MANDATORY 规则清单
 
-下列规则在本 PR（v2 升级）中由 RECOMMENDED 升级为 MANDATORY（CI 拦截），已在 `ddl_check.py` 中强制启用：
+下列规则在本 PR（v2 升级 + 回调整）中新增或由 RECOMMENDED 升级为 MANDATORY（CI 拦截），已在 `ddl_check.py` 中启用：
 
 | 规则 | 触发场景 |
 |---|---|
@@ -213,8 +224,34 @@ python3 scripts/sql_check.py [--format json]
 | `注释取值范围格式` | 注释中 `[k-v]` 段格式不符 |
 | `补充信息冗余` | 注释 `(...)` 补充信息与主标题完全相同 |
 | `补充信息为空` | 注释出现空括号 `()` |
+| `枚举字段类型` | 注释已声明枚举值域（`[..]` ≥ 2 值）却仍用 `char/varchar` → 应落 `tinyint` 数字码 |
+| `字段长度上限` | 命名模式规则（默认 `*_id` ≤ 36）超限；合规形态为「不超过」，32/36 均放行 |
 
-注：日志/流水表豁免 `last_updater_id/last_update_time` 必含项；必含字段名与规范字段名（`del_flag`）在字段名与索引列缩写检查中豁免；缩写 value 与 MySQL/Python 保留字冲突的 key 跳过反向检查（避免违规循环）。
+注：日志/流水表豁免 `last_updater_id/last_update_time` 必含项；必含字段名与规范字段名（`del_flag`）在字段名与索引列缩写检查中豁免；缩写 value 与 MySQL/Python 保留字冲突的 key 跳过反向检查（避免违规循环）。`枚举字段类型` 只作用于 `char/varchar`（TEXT 族默认由 `禁用类型` 单独报告，不双报；项目把 `text_type_severity` 置 `off` 时由本规则兜底，不留检查真空）；`del_flag` 是规范固定字段，不按业务枚举处理，其**类型须为 `tinyint`** 属人工确认项（脚本只查名称与注释）。多值列表列（`*_ids`/`*_id_list`/`*_codes` 等后缀，或注释含「逗号分隔/列表/多选/集合」）与**数值区间**（值域全为数字且注释含「区间/范围/range」，或小数值域）按列表/区间处理，不报枚举；注释含「范围」但值域是 `[1-订单,2-结算]` 的业务枚举仍会报；纯小数且不带标签的值域（如 `[0.5,0.8]`）按数值区间放过。
+
+#### 项目级配置（`.ddl-guard.json`，可选）
+
+规范正文不变，配置只调节检查级别与基线数据。脚本按 `--config` > 从审查路径向上回溯 > 从
+当前目录向上回溯（均到项目根 `.git` 为止）的顺序查找 `.ddl-guard.json`；配置非法（未知配置项、
+取值非法、正则写错、上限非正整数）一律以退出码 2 失败，不静默回落默认值。生效配置来源与
+被降级/替换的检查会打印在 stderr。
+
+```json
+{
+  "text_type_severity": "recommended",
+  "enum_field_type_check": true,
+  "field_length_rules": [
+    {"pattern": "(^|_)idemp_id$", "max": 64},
+    {"pattern": "(^|_)id$", "max": 36, "severity": "mandatory"}
+  ]
+}
+```
+
+| 配置项 | 取值 | 说明 |
+|---|---|---|
+| `text_type_severity` | `mandatory`（默认）/`recommended`/`off` | TEXT 族（text/tinytext/mediumtext/longtext）级别；规范【强制】只在项目显式配置时降级，blob/json 等恒强制 |
+| `enum_field_type_check` | 布尔，默认 `true` | 置 `false` 关闭「枚举字段类型」检查 |
+| `field_length_rules` | 规则数组，**整体替换**默认集 | 命名模式规则（非字段名白名单）：`pattern` 对字段小写名 `re.search`，`max` 为上限，`severity` 可选 `mandatory`/`recommended`；**首个命中规则生效**，特殊字段族用更具体模式前置即可放宽。**替换默认集时必须把 `*_id` 规则一并写出**，否则内置的 `*_id ≤ 36` 强制检查会消失（脚本会在 stderr 提示） |
 
 ### 第 2 步：AI 复核语义层
 
